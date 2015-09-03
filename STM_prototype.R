@@ -137,7 +137,7 @@ save(stmFit,SelectCorpus,out,RAW,file="data/stmFit.RData")
 ###For a given Carrier (i.e. we need to derive the [topic|word,document] distribution)
 ###Using equation 27.37 in Murphy, Machine Learning a Probabilistic Perspective
 ########################
-load <- "ca-ca" ###here is the target we want to get a topic classification for
+load <- "ca-nj" ###here is the target we want to get a topic classification for
 load_ID <- which(out$vocab == load)
 customer <- "C331640" ###here is the customer we want to assign a load to
 customer_ID <- which(out$meta == customer) ### get the document corpus ID
@@ -240,17 +240,24 @@ DistanceKernel <- function(c){
 scale_postdraw <- postdraw*unitvec_scale ###make unit vector length for cosine direction
 similarity_angle <- apply(scale_postdraw,1,DistanceKernel) ###this is the amount of the dist that projects to the PMF
 Ect <- similarity_angle*wct ###weight by shipments to get E(ct) of carrier in Load Corridor Distribution
-relevence_lambda <- 0.5  ###important tuning parameter to be set [0,1] that governs matching similarity
+relevence_lambda <- 1  ###important tuning parameter to be set [0,1] that governs matching similarity
 Ect_margin <- sum(Ect)/sum(wct) ###how common is this projection in the data
 
 ####essentially this is number of shipments in lane by carrier vs lift (similar to FREX score)
-relevance <- relevence_lambda*log(Ect) + (1 - relevence_lambda)*log(similarity_angle/Ect_margin)
+x=log(Ect)
+y=log(similarity_angle/Ect_margin)
+relevance <- relevence_lambda*x + (1 - relevence_lambda)*y
 
+plot(y~x,ylab="Log(lift)",xlab="log(Ect)")
 
 ordered_post <- postdraw[order(relevance,decreasing = T),]
 ordered_meta <- out$meta[CarrierTID,]
 ordered_meta <- ordered_meta[order(relevance,decreasing = T),]
 ordered_angle <- similarity_angle[order(relevance,decreasing = T)]
+ordered_scale_postdraw <- scale_postdraw[order(relevance,decreasing = T),]
+ordered_relevance <- relevance[order(relevance,decreasing = T)]
+ordered_x <- x[order(relevance,decreasing = T)]
+ordered_y <- y[order(relevance,decreasing = T)]
 
 round(ordered_post[1,],2)
 round(PMF,2)
@@ -262,15 +269,34 @@ ordered_angle[1:100]
 ###Investigate the Result
 ###By looking at carrier recommendations
 ########################
-relevance_ecdf <- ecdf(relevance)
-cutoff <- 0.05 ##keep cutoff or more
+relevance_ecdf <- ecdf(ordered_relevance)
+cutoff <- 0.01 ##keep cutoff or more
 loss <- quantile(relevance_ecdf,1-cutoff) #give me the quantile for the cutoff percentile
 hist(relevance,breaks=200,
      xlab="Relevance Score",
      main=paste0(round(cutoff,2)*100,
-                 "% of Carriers in Terms of Relevance (weighted L*Ect and (1-L)*Lift), L=",
+                 "% of Carriers in Terms of Relevance (L*log(Ect) + (1-L)*log(lift)): L=",
                  relevence_lambda))
 abline(v=loss,lty=2)
+
+
+####Now we strip out the relevant data from the lane distribution
+ShortList <- ordered_meta[ordered_relevance>=loss,]
+ShortList$relevance <- ordered_relevance[ordered_relevance>=loss]
+ShortList$Log_Ect <- ordered_x[ordered_relevance>=loss]
+ShortList$Log_Lift <- ordered_y[ordered_relevance>=loss]
+ShortList$Lambda <- relevence_lambda
+ShortList$Pct_Alignment <- exp(ShortList$Log_Ect)/ShortList$TransactionCount
+
+p <- ggplot(ShortList,aes(x=Log_Ect,y=Log_Lift))+geom_point()
+print(p)
+
+
+
+#######################
+####
+####
+
 
 
 ###lets plot the topic divergence/similarity between carriers & load
@@ -286,9 +312,9 @@ MDSScale <- function (phi){
 }
 
 ###add on the current load 1st row to the distance matrix
-take <- 1000###numer of carriers to look at in terms of similarity
-phi <- rbind(PMF,ordered_post[1:take,])
-metaMDS <- ordered_meta[1:take,]
+ID <- relevance>=loss
+phi <- rbind(PMF_unitvec,ordered_scale_postdraw[ID,])
+metaMDS <- ordered_meta[ID,]
 ###kernel distance matrix MDS projections in 2D for plotting
 Kxx <- MDSScale(phi)
 
@@ -297,8 +323,6 @@ Kxx$Category[1] <- "Load"
 Kxx$MeanNetRevenue <- NA
 Kxx$MeanNetRevenue[-1] <- metaMDS$MeanNetRevenue
 Kxx$MeanNetRevenue[1] <- max(metaMDS$MeanNetRevenue)
-
-
 
 p <- ggplot(Kxx,aes(x=x,y=y,colour=Category,size=MeanNetRevenue))+geom_point()
 print(p)
