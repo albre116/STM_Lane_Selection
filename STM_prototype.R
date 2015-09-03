@@ -13,7 +13,14 @@ if(!require("stm"))
   install.packages("stm")
 if(!require("dplyr"))
   install.packages("dplyr")
+if(!require("ggplot2"))
+  install.packages("ggplot2")
 
+REFIT <- FALSE  ###refit the model?
+
+if(exists("data/stmFit.RData") | !REFIT){
+  load("data/stmFit.RData")
+  }else{
 
 #####Read in the data
 #the variable of interest is RAW
@@ -122,14 +129,15 @@ SelectCorpus$ShortTexts <- unlist(lapply(SelectCorpus$Document,shorttexts))
 
 ###now begin model construction
 stmFit <- stm(out$documents,out$vocab,K=0,max.em.its = 75,data=meta,init.type = "Spectral")
-
+save(stmFit,SelectCorpus,out,RAW,file="data/stmFit.RData")
+}####end else wrapper for quick load
 
 ########################
 ###Assign a New Load to a topic
 ###For a given Carrier (i.e. we need to derive the [topic|word,document] distribution)
 ###Using equation 27.37 in Murphy, Machine Learning a Probabilistic Perspective
 ########################
-load <- "ca-tn" ###here is the target we want to get a topic classification for
+load <- "ca-ca" ###here is the target we want to get a topic classification for
 load_ID <- which(out$vocab == load)
 customer <- "C331640" ###here is the customer we want to assign a load to
 customer_ID <- which(out$meta == customer) ### get the document corpus ID
@@ -201,29 +209,100 @@ PMF <- Density/sum(Density)
 names(PMF) <- paste("Topic",1:length(PMF))
 print(round(PMF,2))
 
-
+#############################################
 ####establish carrier customer topic distance
 ####for the load of interest
+####We start with cosine distance to take into account
+####the raw number of shipments and the topic alignment
+####Basically, we want a E(shipments) that align with topic
+####Assignment
+####Other distance measures may suffice too
+#############################################
 CarrierTID <- grep("T",out$meta$ID)
 postdraw <- model$theta[CarrierTID,]
-
-
+unitvec_scale <- apply(postdraw,1,function(b){
+  1/sqrt(sum(b^2))
+})
+wct <- lapply(CarrierTID,function(b){
+  sum(documents[[b]][2,])
+})
+wct <- unlist(wct) ###get word count for carrier
+PMF_unitvec <- (1/sqrt(sum(PMF^2)))*PMF
+cosdist <- function(x, y) {x%*%y}
 DistanceKernel <- function(c){
-  r <- PMF
-  jensenShannon <- function(x, y) {
-    m <- 0.5 * (x + y)
-    0.5 * sum(x * log(x/m)) + 0.5 * sum(y * log(y/m))
-  }
-  x <- matrix(c(c,r),nrow=2,byrow = T)
-  dist.mat <- proxy::dist(x = x, method = jensenShannon)
+  x <- matrix(c(c,PMF_unitvec),nrow=2,byrow = T)
+  dist.mat <- proxy::dist(x = x, method = cosdist)
   return(dist.mat)
 }
 
-similarity <- apply(postdraw,1,DistanceKernel)
+###run similarity for load topic distribution versus 
+###carrier topic distributions 1 at a time
+scale_postdraw <- postdraw*unitvec_scale ###make unit vector length for cosine direction
+similarity_angle <- apply(scale_postdraw,1,DistanceKernel) ###this is the amount of the dist that projects to the PMF
+Ect <- similarity_angle*wct ###weight by shipments to get E(ct) of carrier in Load Corridor Distribution
+relevence_lambda <- 0.5  ###important tuning parameter to be set [0,1] that governs matching similarity
+Ect_margin <- sum(Ect)/sum(wct) ###how common is this projection in the data
 
-ordered_post <- postdraw[order(similarity),]
+####essentially this is number of shipments in lane by carrier vs lift (similar to FREX score)
+relevance <- relevence_lambda*log(Ect) + (1 - relevence_lambda)*log(similarity_angle/Ect_margin)
+
+
+ordered_post <- postdraw[order(relevance,decreasing = T),]
 ordered_meta <- out$meta[CarrierTID,]
-ordered_meta <- ordered_meta[order(similarity),]
+ordered_meta <- ordered_meta[order(relevance,decreasing = T),]
+ordered_angle <- similarity_angle[order(relevance,decreasing = T)]
+
+round(ordered_post[1,],2)
+round(PMF,2)
+sum(ordered_post[1,])
+ordered_angle[1:100]
+
+
+########################
+###Investigate the Result
+###By looking at carrier recommendations
+########################
+relevance_ecdf <- ecdf(relevance)
+cutoff <- 0.05 ##keep cutoff or more
+loss <- quantile(relevance_ecdf,1-cutoff) #give me the quantile for the cutoff percentile
+hist(relevance,breaks=200,
+     xlab="Relevance Score",
+     main=paste0(round(cutoff,2)*100,
+                 "% of Carriers in Terms of Relevance (weighted L*Ect and (1-L)*Lift), L=",
+                 relevence_lambda))
+abline(v=loss,lty=2)
+
+
+###lets plot the topic divergence/similarity between carriers & load
+###on a 2D grid using multi dimensional scaling
+###for this we need to scale the relevance score
+###to be a similarity measure
+
+MDSScale <- function (phi){
+  cosdist <- function(x, y) {x%*%y}
+  dist.mat <- proxy::dist(x = phi, method = cosdist)
+  pca.fit <- cmdscale(dist.mat, k = 2)
+  data.frame(x = pca.fit[, 1], y = pca.fit[, 2])
+}
+
+###add on the current load 1st row to the distance matrix
+take <- 1000###numer of carriers to look at in terms of similarity
+phi <- rbind(PMF,ordered_post[1:take,])
+metaMDS <- ordered_meta[1:take,]
+###kernel distance matrix MDS projections in 2D for plotting
+Kxx <- MDSScale(phi)
+
+Kxx$Category <- "Carrier"
+Kxx$Category[1] <- "Load"
+Kxx$MeanNetRevenue <- NA
+Kxx$MeanNetRevenue[-1] <- metaMDS$MeanNetRevenue
+Kxx$MeanNetRevenue[1] <- max(metaMDS$MeanNetRevenue)
+
+
+
+p <- ggplot(Kxx,aes(x=x,y=y,colour=Category,size=MeanNetRevenue))+geom_point()
+print(p)
+
 
 
 
