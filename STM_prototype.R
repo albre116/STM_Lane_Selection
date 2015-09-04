@@ -137,10 +137,6 @@ save(stmFit,SelectCorpus,out,RAW,file="data/stmFit.RData")
 ###For a given Carrier (i.e. we need to derive the [topic|word,document] distribution)
 ###Using equation 27.37 in Murphy, Machine Learning a Probabilistic Perspective
 ########################
-load <- "ca-nj" ###here is the target we want to get a topic classification for
-load_ID <- which(out$vocab == load)
-customer <- "C331640" ###here is the customer we want to assign a load to
-customer_ID <- which(out$meta == customer) ### get the document corpus ID
 
 #define some parameters
 model <- stmFit
@@ -151,6 +147,13 @@ lambda <- model$eta
 beta <- lapply(model$beta$logbeta, exp)
 betaindex <- model$settings$covariates$betaindex
 documents <- out$documents
+
+
+Load_PMF <- function(load="ca-ca",customer="C331640"){
+#load <- "ca-nj" ###here is the target we want to get a topic classification for
+load_ID <- which(out$vocab == load)
+#customer <- "C331640" ###here is the customer we want to assign a load to
+customer_ID <- which(out$meta == customer) ### get the document corpus ID
 
 #####create a count of specific words by topic matrix for the document
 #####specific topic deviations EB = exp(lambda)*global.beta
@@ -181,9 +184,11 @@ gamma <- 100 ###smoothing prior psuedo count in first term for global specific s
 V <- ncol(Word_Topic_Matrix) ###size of vocabulary 
 Ck <- Topic_Margin[k]#number of words assigned to topic k
 
+
+
 ###Part 2 of equation 27.37
 #####Now We need to estimate how often a topic is used in a given document
-
+if(length(customer_ID)>0){  ###we find the customer in the register
 doc.ct <- documents[[customer_ID]][2,]
 eta <- lambda[customer_ID,]
 theta <- model$theta[customer_ID,]
@@ -196,6 +201,11 @@ phi <- EB*(doc.ct) #multiply through by word count
 ###part 2 equation terms
 Cik <- colSums(phi)[k]  ###how often Topic k is used in target document 
 Li <- sum(doc.ct)  ###total number of words in target document
+}else{ ###we don't find the customer
+  Cik <- 0  ##no counts found
+  Li <- 0  ##no counts found
+}
+
 K <- length(Topic_Margin)  ###number of total topics
 alpha <- 1 ###smoothing parameter for the document specific parameter
 
@@ -208,6 +218,18 @@ Density <- unlist(lapply(1:length(Topic_Margin),TopicAssignWordCarrier))
 PMF <- Density/sum(Density)
 names(PMF) <- paste("Topic",1:length(PMF))
 print(round(PMF,2))
+return(list(PMF=PMF,Word_Margin=Word_Margin,Topic_Margin=Topic_Margin))
+}###end function
+
+PMF_estimate <- Load_PMF()
+
+Word_Margin <- PMF_estimate[["Word_Margin"]]
+Topic_Margin <- PMF_estimate[["Topic_Margin"]]
+PMF <- PMF_estimate[["PMF"]]
+
+
+
+
 
 #############################################
 ####establish carrier customer topic distance
