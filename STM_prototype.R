@@ -547,7 +547,7 @@ for(i in 1:length(CarrierTopics$docs)){
 
 
 
-ClassifierResult <- STMRecommender(load="ca-nj",customer="C331640",percentile_cutoff=0.01,Show=5)
+ClassifierResult <- STMRecommender(load="az-co",customer="C989016",percentile_cutoff=0.01,Show=5)
 plotdata <- ClassifierResult[["PMF"]]
 names(plotdata) <- 1:length(plotdata)
 print(round(plotdata,2))
